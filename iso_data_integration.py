@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import requests
 from io import StringIO
+import pytz
 
 #=======================
 # Data Functions
@@ -250,3 +251,54 @@ ISO_CONFIG = {
         'timezone': 'America/New_York'  # Eastern Time
     }
 }
+
+def ensure_uniform_hourly_index(df, iso_key):
+    """
+    Robust timezone handling with explicit DST ambiguity resolution
+    """
+    config = ISO_CONFIG[iso_key]
+    
+    # 1. Remove duplicates first
+    df = df[~df.index.duplicated(keep='first')]
+    
+    # 2. Ensure datetime index
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    
+    # 3. Handle timezone conversion with DST parameters
+    try:
+        if df.index.tz is None:
+            # Localize with explicit DST handling
+            df = df.tz_localize(
+                config['timezone'],
+                ambiguous='infer',  # Let pandas infer DST based on timestamp order
+                nonexistent='shift_forward'  # Handle spring-forward transitions
+            )
+        else:
+            df = df.tz_convert(config['timezone'])
+    except pytz.exceptions.AmbiguousTimeError:
+        # Fallback for ambiguous times: assume non-DST (standard time)
+        df = df.tz_localize(
+            config['timezone'],
+            ambiguous=False,
+            nonexistent='shift_forward'
+        )
+    
+    # 4. Convert to UTC for uniform handling
+    df = df.tz_convert('UTC')
+    
+    # 5. Create complete UTC index
+    full_range = pd.date_range(
+        start=df.index.min(),
+        end=df.index.max(),
+        freq='H',
+        tz='UTC'
+    )
+    
+    # 6. Reindex and interpolate
+    df = df.reindex(full_range)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if not numeric_cols.empty:
+        df[numeric_cols] = df[numeric_cols].interpolate(method='time')
+    
+    return df
