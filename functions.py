@@ -250,22 +250,27 @@ def preprocess_caiso(data):
 ISO_CONFIG = {
     'SPP': {
         'filenames': ["spp_load-temp_hr_2024.csv", "spp_load-temp_hr_2025.csv"],
-        'processor': preprocess_spp
+        'processor': preprocess_spp,
+        'timezone': 'America/Chicago'  # Central Time
     },
     'MISO': {
         'filenames': ["miso_load-temp_hr_2024.csv", "miso_load-temp_hr_2025.csv"],
-        'processor': preprocess_miso
+        'processor': preprocess_miso,
+        'timezone': 'America/New_York'  # Eastern Standard Time
     },
     'ERCOT': {
         'filenames': ["ercot_load-temp_hr_2024.csv", "ercot_load-temp_hr_2025.csv"],
-        'processor': preprocess_ercot
+        'processor': preprocess_ercot,
+        'timezone': 'America/Chicago'  # Central Time
     },
     'CAISO': {
         'filenames': ["caiso_load-temp_hr_2024.csv", "caiso_load-temp_hr_2025.csv"],
-        'processor': preprocess_caiso
+        'processor': preprocess_caiso,
+        'timezone': 'America/Los_Angeles'  # Pacific Time
     },
     'PJM': {
         'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
-        'processor': preprocess_pjm
+        'processor': preprocess_pjm,
+        'timezone': 'America/New_York'  # Eastern Time
     }
 }
