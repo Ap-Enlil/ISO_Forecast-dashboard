@@ -6,6 +6,9 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 import numpy as np
 from iso_data_integration import ISO_CONFIG, load_all_iso_data, ensure_uniform_hourly_index
 from metrics_calculation import compute_iso_metrics
+import matplotlib
+from matplotlib.colors import LinearSegmentedColormap
+
 
 # ---------------------------------
 # Better Cache Management + Helpers
@@ -18,6 +21,7 @@ def load_and_process_data(iso_key):
     """
     iso_data = load_all_iso_data()
     return iso_data.get(iso_key)
+
 
 ###############################
 # 4) Streamlit App
@@ -38,22 +42,29 @@ def main():
     with tab_comparison:
         st.subheader("Comparison of All ISOs")
 
-        # Optionally let user select a date range
-        st.write("**Select Date Range for Metrics**")
-        # We'll find a global min/max date across all loaded ISOs
         all_indices = []
         for df_ in iso_data_dict.values():
-            if df_ is not None:
+            # Skip if None or truly empty
+            if df_ is not None and not df_.empty:
                 all_indices.append(df_.index)
+
+        # If nothing is valid, stop here
         if not all_indices:
             st.error("No data available for any ISO.")
             return
 
-        # Global min/max
-        global_min = min(idx.min() for idx in all_indices)
-        global_max = max(idx.max() for idx in all_indices)
-        default_start = global_max - pd.Timedelta(days=30)  # last 30 days default
+        # Filter out empty or all-NaT indexes
+        valid_indices = [idx for idx in all_indices if (len(idx) > 0 and not idx.min() is pd.NaT)]
 
+        if not valid_indices:
+            st.error("All ISO data frames are empty or invalid. No data to show.")
+            return
+
+        global_min = min(idx.min() for idx in valid_indices)
+        global_max = max(idx.max() for idx in valid_indices)
+        default_start = global_max - pd.Timedelta(days=30)  # last 30 days by default
+
+        # Date slider
         start_date, end_date = st.slider(
             label="Date Range",
             min_value=global_min.to_pydatetime().date(),
@@ -62,15 +73,14 @@ def main():
             format="YYYY-MM-DD"
         )
 
-        # Now compute metrics for each ISO in that date window
+        # Compute metrics for each ISO in that date window
         metrics_dict = {}
         for iso_key, df_ in iso_data_dict.items():
             if df_ is not None and not df_.empty:
                 # Filter by date
                 df_filtered = df_.loc[str(start_date):str(end_date)].copy()
-                # Optionally ensure uniform index (if you want to do so for metrics):
+                # Optionally ensure uniform index:
                 df_filtered = ensure_uniform_hourly_index(df_filtered, iso_key)
-
                 # Compute metrics
                 metrics = compute_iso_metrics(df_filtered)
                 metrics_dict[iso_key] = metrics
@@ -88,43 +98,107 @@ def main():
                     'Avg % Error (Weekend)': np.nan
                 }
 
-        # Create a DataFrame
+        # Create a DataFrame of metrics
         df_metrics = pd.DataFrame.from_dict(metrics_dict, orient='index')
-        # Sort the index so it's always in a consistent order (SPP, MISO, ERCOT, CAISO, PJM)
-        iso_order = list(ISO_CONFIG.keys())  # e.g. ["SPP", "MISO", "ERCOT", "CAISO", "PJM"]
-        df_metrics = df_metrics.reindex(index=iso_order)
+
+        # Sort by MAPE ascending
+        df_metrics_sorted = df_metrics.sort_values(by="MAPE (%)", ascending=True)
 
         # Round for display
-        df_metrics = df_metrics.round(2)
+        df_metrics_sorted = df_metrics_sorted.round(2)
+        cmap = LinearSegmentedColormap.from_list("RedGreenBlue", ["white", "white", "white"])
 
-        # Let user pick a metric to "rank" by
-        rank_by_col = st.selectbox(
-            "Rank by which metric?",
-            options=df_metrics.columns.tolist(),
-            index=0
-        )
+# Function to apply column-wise color scaling with lighter colors & bold text
+        def apply_colormap(col):
+            min_val, max_val = col.min(), col.max()  # Get min and max for each column
+            if max_val == min_val:  # Avoid division by zero
+                return ["background-color: rgba(255, 255, 255, 0.3); font-weight: bold"] * len(col)
+            
+            def color_mapping(x):
+                normalized_value = (x - min_val) / (max_val - min_val)  # Normalize between 0-1
+                r, g, b, _ = cmap(normalized_value)  # Get RGB values from colormap
+                return f"background-color: rgba({int(r*255)}, {int(g*255)}, {int(b*255)}, 0.3); font-weight: bold"
 
-        # Sort by that metric ascending
-        df_metrics_sorted = df_metrics.sort_values(by=rank_by_col, ascending=True)
+            return col.map(color_mapping)
 
-        st.write("**Comparison Table (Ranked by:** {}**)**".format(rank_by_col))
-        st.dataframe(df_metrics_sorted)
+        # Apply column-wise gradient separately for each column
+        df_metrics_styled = df_metrics_sorted.style.apply(apply_colormap, axis=0)
+
+
+        st.write("**Comparison Table (Sorted by MAPE)**")
+        st.write(df_metrics_styled)
+
+        # -----------------------------
+        # Is the Model Improving? (Split Date Range)
+        # -----------------------------
+        # We'll compare MAPE of first half vs. second half of the chosen date range
+
+        st.write("---")
+        st.write("### Is the Model Improving? (First Half vs Second Half)")
+        date_range = pd.date_range(start=str(start_date), end=str(end_date), freq='H')
+        if len(date_range) < 2:
+            st.warning("Not enough data to split the selected range in half.")
+        else:
+            mid_date = date_range[int(len(date_range) / 2)]
+
+            metrics_dict_first_half = {}
+            metrics_dict_second_half = {}
+
+            for iso_key, df_ in iso_data_dict.items():
+                if df_ is not None and not df_.empty:
+                    df_first = df_.loc[str(start_date):str(mid_date)].copy()
+                    df_second = df_.loc[str(mid_date):str(end_date)].copy()
+
+                    df_first = ensure_uniform_hourly_index(df_first, iso_key)
+                    df_second = ensure_uniform_hourly_index(df_second, iso_key)
+
+                    metrics_first = compute_iso_metrics(df_first)
+                    metrics_second = compute_iso_metrics(df_second)
+
+                    metrics_dict_first_half[iso_key] = metrics_first
+                    metrics_dict_second_half[iso_key] = metrics_second
+                else:
+                    empty_metrics = {'MAPE (%)': np.nan}
+                    metrics_dict_first_half[iso_key] = empty_metrics
+                    metrics_dict_second_half[iso_key] = empty_metrics
+
+            df_metrics_first = pd.DataFrame.from_dict(metrics_dict_first_half, orient='index')
+            df_metrics_second = pd.DataFrame.from_dict(metrics_dict_second_half, orient='index')
+
+            # Build a small summary table: MAPE in each half, plus the Delta
+            df_improvement = pd.DataFrame(index=df_metrics_first.index)
+            df_improvement["MAPE (First Half)"] = df_metrics_first["MAPE (%)"]
+            df_improvement["MAPE (Second Half)"] = df_metrics_second["MAPE (%)"]
+            df_improvement["Delta MAPE (2nd - 1st)"] = (
+                df_improvement["MAPE (Second Half)"] - df_improvement["MAPE (First Half)"]
+            )
+
+            df_improvement = df_improvement.round(2)
+
+            # Color scale the Delta MAPE: red if positive, green if negative
+            # We'll use 'RdYlGn' but reverse so that negative is green
+            df_improvement_styled = (
+                df_improvement.style
+                .background_gradient(cmap='RdYlGn_r', subset=["Delta MAPE (2nd - 1st)"])
+            )
+
+            st.write(df_improvement_styled)
 
         # Add metric explanations
         st.markdown("""
         **Metric Definitions:**
 
-        *   **Avg APE (%)**: Average Absolute Percentage Error. The average of the absolute values of the percentage errors. It measures the magnitude of errors regardless of direction.
+        *   **Avg APE (%)**: Average Absolute Percentage Error. The average of the absolute values of the percentage errors, ignoring sign.
             *   `APE = |(Actual - Forecast) / Actual| * 100`
             *   `Avg APE = (1/n) * Σ APE`
         *   **Avg Error (MW)**: The average forecast error in megawatts (MW). A positive value indicates under-forecasting, and a negative value indicates over-forecasting.
             *   `Avg Error = (1/n) * Σ (Actual - Forecast)`
         *   **MAPE (%)**: Mean Absolute Percentage Error. The average of the absolute percentage errors, providing a measure of the overall forecast accuracy relative to the actual load.
             *   `MAPE = (1/n) * Σ |(Actual - Forecast) / Actual| * 100`
-        *   **Avg % Error (Morning/Afternoon/Evening/Night)**: The average percentage error during specific time periods. This helps identify if the forecast performs better or worse during certain times of the day.
+        *   **Avg % Error (Morning/Afternoon/Evening/Night)**: The average percentage error during specific time periods.
             *   `% Error = (Actual - Forecast) / Actual * 100`
             *   `Avg % Error = (1/n) * Σ % Error` (for the given time period)
-        *   **Avg % Error (Weekday/Weekend)**: The average percentage error on weekdays versus weekends. This helps determine if there are systematic differences in forecast performance based on the day of the week.
+        *   **Avg % Error (Weekday/Weekend)**: The average percentage error on weekdays vs weekends.
             *   `Avg % Error = (1/n) * Σ % Error` (for weekdays or weekends)
         """)
 
@@ -163,12 +237,11 @@ def main():
         # Ensure uniform hourly index
         df = ensure_uniform_hourly_index(df_range, selected_iso)
 
-        # (Optional) 30-day rolling average
+        # (Optional) 30-day rolling average on forecast error
         if 'Forecast Error (MW)' in df.columns:
             df['Error_MA_30D'] = df['Forecast Error (MW)'].rolling(window=24*30, min_periods=1).mean()
 
-        # ============= PLOTS (Same as your old code) =============
-        # (1) Actual vs Forecast and (2) Forecast Error
+        # ============= PLOTS (Load vs Forecast, Forecast Error) =============
         fig1 = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,

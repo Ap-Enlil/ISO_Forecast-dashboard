@@ -30,174 +30,48 @@ def download_data(filenames):
 #=======================
 # Processing Functions
 #=======================
+def preprocess_iso_data(data, iso_key):
+    """
+    Generic preprocessing function for all ISOs.
 
-def preprocess_spp(data):
-    """SPP-specific data processing"""
+    """
     if data is None:
         return None
     df = data
+    config = ISO_CONFIG[iso_key]
 
-    # Use the expected column name for Central Time
-    required_columns = ['Local Timestamp Central Time (Interval Beginning)',
-                        'SPP Total Actual Load (MW)', 'SPP Total Forecast Load (MW)']
-    if not all(col in df.columns for col in required_columns):
-        missing = [col for col in required_columns if col not in df.columns]
-        raise KeyError(f"Missing required columns for SPP processing: {missing}")
+    
+    if iso_key == "ERCOT":
+        # Fetch both actual and forecast data
+        print("YoMAMA")
+        print(df.columns)
+        
+    # Ensure required columns are present
+    if not all(col in df.columns for col in config['required_columns']):
+        missing = [col for col in config['required_columns'] if col not in df.columns]
+        
+        # Attempt to rename columns if a mapping is provided
+        if 'rename_map' in config:
+            df = df.rename(columns=config['rename_map'])
+            # Recheck if all required columns are present after renaming
+            if not all(col in df.columns for col in config['required_columns']):
+                missing = [col for col in config['required_columns'] if col not in df.columns]
+                raise KeyError(f"Missing required columns for {iso_key} processing after renaming: {missing}")
+        else:
+            raise KeyError(f"Missing required columns for {iso_key} processing: {missing}")
 
-    # Convert and sort timestamps (handling timezone internally)
-    df['Timestamp'] = pd.to_datetime(df['Local Timestamp Central Time (Interval Beginning)'])
-
-    # Remove timezone information
-    df['Timestamp'] = df['Timestamp'].dt.tz_localize(None)
-
+    # Convert and sort timestamps
+    df['Timestamp'] = pd.to_datetime(df[config['timestamp_column']])
     df = df.sort_values('Timestamp').set_index('Timestamp')
 
     # Column standardization (if needed)
-    df = df.rename(columns={
-        'SPP Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-        'SPP Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-    })
+    if 'rename_map' in config:
+        df = df.rename(columns=config['rename_map'])
 
     # Forecast calculations
-    df['Forecast Error (MW)'] = df['SystemTotal Forecast Load (MW)'] - df['TOTAL Actual Load (MW)']
-    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-
-    # Rolling metrics
-    df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean()
-    df['Rolling Avg Error (MW)'] = df['Forecast Error (MW)'].rolling('7D').mean()
-
-    return df.dropna()
-def preprocess_miso(data):
-    """MISO-specific data processing"""
-    if data is None:
-        return None
-    df = data
-
-    # Use the original expected column name (even though the data is in Eastern Time)
-    required_columns = ['Local Timestamp Central Time (Interval Beginning)',  # We'll handle the timezone internally
-                        'MISO Total Actual Load (MW)', 'MISO Total Forecast Load (MW)']
-
-    if not all(col in df.columns for col in required_columns):
-        # Rename the Eastern Time column to the expected Central Time name TEMPORARILY
-        df = df.rename(columns={'Local Timestamp Eastern Standard Time (Interval Beginning)': 'Local Timestamp Central Time (Interval Beginning)'})
-        # Recheck if all required columns are present after renaming
-        if not all(col in df.columns for col in required_columns):
-            missing = [col for col in required_columns if col not in df.columns]
-            raise KeyError(f"Missing required columns for MISO processing: {missing}")
-
-    # Convert and sort timestamps
-    df['Timestamp'] = pd.to_datetime(df['Local Timestamp Central Time (Interval Beginning)'])
-
-    # Remove timezone information
-    df['Timestamp'] = df['Timestamp'].dt.tz_localize(None)
-
-    df = df.sort_values('Timestamp').set_index('Timestamp')
-
-    # Column standardization (if needed) - modify as necessary
-    df = df.rename(columns={
-        'MISO Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-        'MISO Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-    })
-
-    # Forecast calculations
-    df['Forecast Error (MW)'] = df['SystemTotal Forecast Load (MW)'] - df['TOTAL Actual Load (MW)']
-    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-
-    # Rolling metrics
-    df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean()
-    df['Rolling Avg Error (MW)'] = df['Forecast Error (MW)'].rolling('7D').mean()
-
-    return df.dropna()
-def preprocess_pjm(data):
-    """PJM-specific data processing"""
-    if data is None:
-        return None
-    df = data
-
-    # Ensure required columns are present
-    required_columns = ['Local Timestamp Eastern Time (Interval Beginning)',
-                        'PJM Total Actual Load (MW)', 'PJM Total Forecast Load (MW)']
-    if not all(col in df.columns for col in required_columns):
-        missing = [col for col in required_columns if col not in df.columns]
-        raise KeyError(f"Missing required columns for PJM processing: {missing}")
-
-    # Convert and sort timestamps
-    df['Timestamp'] = pd.to_datetime(df['Local Timestamp Eastern Time (Interval Beginning)'])
-    df = df.sort_values('Timestamp').set_index('Timestamp')
-
-    # Column standardization (if needed) - modify as necessary
-    df = df.rename(columns={
-        'PJM Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-        'PJM Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-    })
-
-    # Forecast calculations
-    df['Forecast Error (MW)'] = df['SystemTotal Forecast Load (MW)'] - df['TOTAL Actual Load (MW)']
-    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-
-    # Rolling metrics
-    df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean()
-    df['Rolling Avg Error (MW)'] = df['Forecast Error (MW)'].rolling('7D').mean()
-
-    return df.dropna()
-def preprocess_ercot(data):
-    """Enhanced ERCOT processing"""
-    if data is None:
-        return None
-    df = data
-
-    # Ensure required columns are present
-    required_columns = ['Local Timestamp Central Time (Interval Beginning)',
-                        'SystemTotal Forecast Load (MW)', 'TOTAL Actual Load (MW)']
-    if not all(col in df.columns for col in required_columns):
-        missing = [col for col in required_columns if col not in df.columns]
-        raise KeyError(f"Missing required columns for ERCOT processing: {missing}")
-
-    # Convert and sort timestamps
-    df['Timestamp'] = pd.to_datetime(df['Local Timestamp Central Time (Interval Beginning)'])
-    df = df.sort_values('Timestamp').set_index('Timestamp')
-
-    # System forecast calculations
-    df['Forecast Error (MW)'] = df['SystemTotal Forecast Load (MW)'] - df['TOTAL Actual Load (MW)']
-    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-
-    # Rolling metrics
-    df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean()
-    df['Rolling Avg Error (MW)'] = df['Forecast Error (MW)'].rolling('7D').mean()
-
-    return df.dropna()
-
-def preprocess_caiso(data):
-    """CAISO-specific data processing (Revised)"""
-    if data is None:
-        return None
-    df = data
-
-    # Ensure required columns are present
-    required_columns = ['Local Timestamp Pacific Time (Interval Beginning)',
-                        'CAISO Total Actual Load (MW)', 'CAISO Total Forecast Load (MW)']
-    if not all(col in df.columns for col in required_columns):
-        missing = [col for col in required_columns if col not in df.columns]
-        raise KeyError(f"Missing required columns for CAISO processing: {missing}")
-
-    # Convert and sort timestamps
-    df['Timestamp'] = pd.to_datetime(df['Local Timestamp Pacific Time (Interval Beginning)'])
-    df = df.sort_values('Timestamp').set_index('Timestamp')
-
-    # Column standardization
-    df = df.rename(columns={
-        'CAISO Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-        'CAISO Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-    })
-
-    # Forecast calculations
-    df['Forecast Error (MW)'] = df['SystemTotal Forecast Load (MW)'] - df['TOTAL Actual Load (MW)']
-    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
-    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df['TOTAL Actual Load (MW)']).replace(np.inf, np.nan) * 100
+    df['Forecast Error (MW)'] = df[config['forecast_column']] - df[config['actual_column']]
+    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df[config['actual_column']]).replace(np.inf, np.nan) * 100
+    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df[config['actual_column']]).replace(np.inf, np.nan) * 100
 
     # Rolling metrics
     df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean()
@@ -215,40 +89,128 @@ def load_all_iso_data():
     for iso_key, cfg in ISO_CONFIG.items():
         raw_data = download_data(cfg['filenames'])
         if raw_data is not None:
-            df = cfg['processor'](raw_data)
+            df = preprocess_iso_data(raw_data, iso_key)
             iso_data[iso_key] = df
         else:
             iso_data[iso_key] = None
     return iso_data
-
-#=======================
-# ISO Configuration
-#=======================
 ISO_CONFIG = {
     'SPP': {
         'filenames': ["spp_load-temp_hr_2024.csv", "spp_load-temp_hr_2025.csv"],
-        'processor': preprocess_spp,
-        'timezone': 'America/Chicago'  # Central Time
+        'timezone': 'America/Chicago',
+        'required_columns': ['Local Timestamp Central Time (Interval Beginning)', 'SPP Total Actual Load (MW)', 'SPP Total Forecast Load (MW)'],
+        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',  # Corrected after rename
+        'forecast_column': 'SystemTotal Forecast Load (MW)',  # Corrected after rename
+        'rename_map': {
+            'SPP Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
+            'SPP Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
+        }
     },
     'MISO': {
         'filenames': ["miso_load-temp_hr_2024.csv", "miso_load-temp_hr_2025.csv"],
-        'processor': preprocess_miso,
-        'timezone': 'America/New_York'  # Eastern Standard Time
+        'timezone': 'America/New_York',
+
+        # REQUIRED COLUMNS *after* rename
+        'required_columns': [
+            'Local Timestamp Central Time (Interval Beginning)',
+            'TOTAL Actual Load (MW)',
+            'SystemTotal Forecast Load (MW)'
+        ],
+
+        # The column that you reference later for DateTime:
+        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
+
+        # The final column names used in your forecast-error calculations:
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)',
+
+        # The old => new mapping so your code can unify the columns
+        'rename_map': {
+            'Local Timestamp Eastern Standard Time (Interval Beginning)':
+                'Local Timestamp Central Time (Interval Beginning)',
+
+            'MISO Total Actual Load (MW)':
+                'TOTAL Actual Load (MW)',
+
+            'MISO Total Forecast Load (MW)':
+                'SystemTotal Forecast Load (MW)'
+        }
     },
+
     'ERCOT': {
         'filenames': ["ercot_load-temp_hr_2024.csv", "ercot_load-temp_hr_2025.csv"],
-        'processor': preprocess_ercot,
-        'timezone': 'America/Chicago'  # Central Time
+        'timezone': 'America/Chicago',
+        'required_columns': ['Local Timestamp Central Time (Interval Beginning)', 'SystemTotal Forecast Load (MW)', 'TOTAL Actual Load (MW)'],
+        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)'
     },
+
     'CAISO': {
         'filenames': ["caiso_load-temp_hr_2024.csv", "caiso_load-temp_hr_2025.csv"],
-        'processor': preprocess_caiso,
-        'timezone': 'America/Los_Angeles'  # Pacific Time
+        'timezone': 'America/Los_Angeles',
+        'required_columns': ['Local Timestamp Pacific Time (Interval Beginning)', 'CAISO Total Actual Load (MW)', 'CAISO Total Forecast Load (MW)'],
+        'timestamp_column': 'Local Timestamp Pacific Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)',
+        'rename_map': {
+            'CAISO Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
+            'CAISO Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
+        }
     },
     'PJM': {
         'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
-        'processor': preprocess_pjm,
-        'timezone': 'America/New_York'  # Eastern Time
+        'timezone': 'America/New_York',
+        'required_columns': ['Local Timestamp Eastern Time (Interval Beginning)', 'PJM Total Actual Load (MW)', 'PJM Total Forecast Load (MW)'],
+        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)',
+        'rename_map': {
+            'PJM Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
+            'PJM Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
+        }
+    },
+    'PJM_Dominion': {
+        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
+        'timezone': 'America/New_York',
+        'required_columns': ['Local Timestamp Eastern Time (Interval Beginning)', 'Duke Energy Ohio/Kentucky Actual Load (MW)', 'Duke Energy Ohio/Kentucky Forecast Load (MW)'],
+        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)',
+        'rename_map': {
+            'Duke Energy Ohio/Kentucky Actual Load (MW)': 'TOTAL Actual Load (MW)',
+            'Duke Energy Ohio/Kentucky Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
+        }
+    },
+
+
+    'PJM_Duquesne': {
+        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
+        'timezone': 'America/New_York',
+        'required_columns': ['Local Timestamp Eastern Time (Interval Beginning)', 'Duquesne Light Actual Load (MW)', 'Duquesne Light Forecast Load (MW)'],
+        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)',
+        'rename_map': {
+            'Duquesne Light Actual Load (MW)': 'TOTAL Actual Load (MW)',
+            'Duquesne Light Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
+        }
+    },
+
+
+
+        'PJM_EastKentucky': {
+        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
+        'timezone': 'America/New_York',
+        'required_columns': ['Local Timestamp Eastern Time (Interval Beginning)', 'East Kentucky Power Coop Actual Load (MW)', 'East Kentucky Power Coop Forecast Load (MW)'],
+        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)',
+        'rename_map': {
+            'East Kentucky Power Coop Actual Load (MW)': 'TOTAL Actual Load (MW)',
+            'East Kentucky Power Coop Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
+        }
     }
 }
 
