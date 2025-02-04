@@ -2,14 +2,15 @@ import numpy as np
 
 def compute_iso_metrics(df):
     """
-    Compute the updated metrics:
-     - Average APE
-     - Average Error (MW)
-     - MAPE
-     - Average Percentage Error (Morning, Afternoon, Evening, Night, Weekday, Weekend)
-    Return a dictionary of metrics.
+    Compute forecast error metrics for an ISO DataFrame.
+    Returns a dictionary with the following keys:
+      - 'Avg APE (%)': Average Absolute Percentage Error.
+      - 'Avg Error (MW)': Average forecast error in MW.
+      - 'MAPE (%)': Mean Absolute Percentage Error.
+      - 'Avg % Error (Morning/AFternoon/Evening/Night/Weekday/Weekend)': Average percentage errors.
     """
-    if df is None or 'TOTAL Actual Load (MW)' not in df.columns:
+    required_cols = ['TOTAL Actual Load (MW)', 'Forecast Error (MW)', 'APE (%)', 'Percentage Error (%)']
+    if df is None or not all(col in df.columns for col in required_cols):
         return {
             'Avg APE (%)': np.nan,
             'Avg Error (MW)': np.nan,
@@ -22,27 +23,16 @@ def compute_iso_metrics(df):
             'Avg % Error (Weekend)': np.nan
         }
 
-    df = df.dropna(subset=[
-        'TOTAL Actual Load (MW)',
-        'Forecast Error (MW)',
-        'APE (%)',
-        'Percentage Error (%)'
-    ], how='any')
-
+    # Drop rows with missing required values
+    df = df.dropna(subset=required_cols, how='any')
     if len(df) == 0:
-        return {
-            'Avg APE (%)': np.nan,
-            'Avg Error (MW)': np.nan,
-            'MAPE (%)': np.nan,
-            'Avg % Error (Morning)': np.nan,
-            'Avg % Error (Afternoon)': np.nan,
-            'Avg % Error (Evening)': np.nan,
-            'Avg % Error (Night)': np.nan,
-            'Avg % Error (Weekday)': np.nan,
-            'Avg % Error (Weekend)': np.nan
-        }
+        return {key: np.nan for key in [
+            'Avg APE (%)', 'Avg Error (MW)', 'MAPE (%)', 'Avg % Error (Morning)',
+            'Avg % Error (Afternoon)', 'Avg % Error (Evening)', 'Avg % Error (Night)',
+            'Avg % Error (Weekday)', 'Avg % Error (Weekend)'
+        ]}
 
-    # Calculate basic metrics
+    # Basic error metrics
     avg_ape = df['APE (%)'].mean()
     avg_error = df['Forecast Error (MW)'].mean()
     mape = abs(df['Forecast Error (MW)']).sum() / abs(df['TOTAL Actual Load (MW)']).sum() * 100
