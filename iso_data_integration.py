@@ -271,6 +271,8 @@ def ensure_uniform_hourly_index(df, iso_key):
             nonexistent='shift_forward'
         )
 
+
+
     # Convert to UTC
     df = df.tz_convert('UTC')
 
