@@ -25,12 +25,12 @@ ISO_CONFIG = {
         'rename_map': {
             'SPP Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
             'SPP Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        },
+        }#,
                 # --- Price Data Files for ERCOT ---
-        'rt_filenames': ["spp_lmp_rt_15min_hubs_2024Q1.csv","ercot_lmp_rt_15min_hubs_2024Q2.csv","ercot_lmp_rt_15min_hubs_2024Q3.csv","ercot_lmp_rt_15min_hubs_2024Q4.csv", "ercot_lmp_rt_15min_hubs_2025Q1.csv"],
-        'da_filenames': ["ercot_lmp_da_hr_hubs_2024.csv", "ercot_lmp_da_hr_hubs_2025.csv"],
+        #'rt_filenames': ["spp_lmp_rt_15min_hubs_2024Q1.csv","ercot_lmp_rt_15min_hubs_2024Q2.csv","ercot_lmp_rt_15min_hubs_2024Q3.csv","ercot_lmp_rt_15min_hubs_2024Q4.csv", "ercot_lmp_rt_15min_hubs_2025Q1.csv"],
+        #'da_filenames': ["ercot_lmp_da_hr_hubs_2024.csv", "ercot_lmp_da_hr_hubs_2025.csv"],
         # Specify the price column name (for both RT and DA data)
-        'price_column': 'Bus average LMP'
+        #'price_column': 'Bus average LMP'
     },
     'MISO': {
         'filenames': ["miso_load-temp_hr_2024.csv", "miso_load-temp_hr_2025.csv"],
