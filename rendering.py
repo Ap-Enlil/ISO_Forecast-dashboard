@@ -78,7 +78,11 @@ def render_comparison_tab(iso_data_dict, start_date, end_date):
                     "First Half Period": "N/A",
                     "MAPE (Second Half)": np.nan,
                     "Second Half Period": "N/A",
-                    "Delta MAPE": np.nan
+                    "Delta MAPE": np.nan,
+                    "Source": iso_key,  # Add Source column
+                    "Time Step": "Hourly", #Add Freq col
+                    "Type": "Load",
+                    "Update Frequency": "Day Ahead"
                 }
             else:
                 mid_date = date_range[int(len(date_range) / 2)]
@@ -92,27 +96,34 @@ def render_comparison_tab(iso_data_dict, start_date, end_date):
                     "First Half Period": f"{start_date} to {mid_date.date()}",
                     "MAPE (Second Half)": metrics_second.get("MAPE (%)", np.nan),
                     "Second Half Period": f"{mid_date.date()} to {end_date}",
-                    "Delta MAPE": delta
+                    "Delta MAPE": delta,
+                    "Source": iso_key,  # Add Source column
+                    "Time Step": "Hourly",  # Add Time Step column
+                    "Type": "Load",
+                    "Update Frequency": "Day Ahead"
                 }
 
             # Compute MAPE by hour if the required columns exist
-            if ('TOTAL Actual Load (MW)' in df_filtered.columns and 
+            if ('TOTAL Actual Load (MW)' in df_filtered.columns and
                 'SystemTotal Forecast Load (MW)' in df_filtered.columns):
                 df_filtered['APE'] = (np.abs(df_filtered['TOTAL Actual Load (MW)'] -
-                                             df_filtered['SystemTotal Forecast Load (MW)'])
-                                      / df_filtered['TOTAL Actual Load (MW)'] * 100)
+                                             df_filtered['SystemTotal Forecast Load (MW)'])/ df_filtered['TOTAL Actual Load (MW)'] * 100)
                 hourly_mape = df_filtered.groupby(df_filtered.index.hour)['APE'].mean()
                 mape_by_hour[iso_key] = hourly_mape
             else:
                 mape_by_hour[iso_key] = pd.Series([np.nan] * 24, index=range(24))
         else:
-            overall_metrics[iso_key] = {"MAPE (%)": np.nan}
+            overall_metrics[iso_key] = {"MAPE (%)": np.nan, "Source": iso_key, "Time Step": "Hourly", "Type": "Load", "Update Frequency": "Day Ahead"}  #Include the new vars
             improvement_metrics[iso_key] = {
                 "MAPE (First Half)": np.nan,
                 "First Half Period": "N/A",
                 "MAPE (Second Half)": np.nan,
                 "Second Half Period": "N/A",
-                "Delta MAPE": np.nan
+                "Delta MAPE": np.nan,
+                "Source": iso_key,  # Add Source column
+                "Time Step": "Hourly",  # Add frequency column
+                "Type": "Load",
+                "Update Frequency": "Day Ahead"
             }
             mape_by_hour[iso_key] = pd.Series([np.nan] * 24, index=range(24))
 
@@ -127,6 +138,10 @@ def render_comparison_tab(iso_data_dict, start_date, end_date):
     df_summary["Improving"] = df_summary["Delta MAPE"].apply(
         lambda x: "Yes" if pd.notnull(x) and x < 0 else ("No" if pd.notnull(x) else "N/A")
     )
+
+    #Reorder Columns
+    columns = ['Source', 'Time Step', 'Type', 'Update Frequency'] + [col for col in df_summary.columns if col not in ['Source', 'Time Step', 'Type', 'Update Frequency']] #add the col names you want to rearrange
+    df_summary = df_summary[columns]
 
     st.markdown("### Summary Metrics")
     numeric_cols = df_summary.select_dtypes(include=[np.number]).columns
@@ -176,7 +191,6 @@ def render_comparison_tab(iso_data_dict, start_date, end_date):
         yaxis_title="MAPE (%)"
     )
     st.plotly_chart(fig_overall, use_container_width=True)
-
 # ------------------------------
 # Tab 2: Single ISO Detailed Analysis
 # ------------------------------
