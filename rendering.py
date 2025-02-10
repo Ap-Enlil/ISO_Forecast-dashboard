@@ -5,10 +5,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from statsmodels.tsa.seasonal import seasonal_decompose
 from matplotlib.colors import LinearSegmentedColormap
-
+from functions import  load_config, calculate_mape_long_term
+from long_term_forecast_data import load_data_long_term_ercot
 # Import your own modules
 from iso_data_integration2 import ISO_CONFIG, load_all_iso_data, ensure_uniform_hourly_index
 from metrics_calculation import compute_iso_metrics
+from collections import defaultdict
 
 # ------------------------------
 # Helper: Column Color Mapping (if needed)
@@ -19,12 +21,12 @@ def apply_colormap(col):
     min_val, max_val = col.min(), col.max()
     if max_val == min_val:
         return ["background-color: rgba(255, 255, 255, 0.3); font-weight: bold"] * len(col)
-    
+
     def color_mapping(x):
         normalized_value = (x - min_val) / (max_val - min_val)
         r, g, b, _ = cmap(normalized_value)
         return f"background-color: rgba({int(r*255)}, {int(g*255)}, {int(b*255)}, 0.3); font-weight: bold"
-    
+
     return col.map(color_mapping)
 
 # ------------------------------
@@ -52,145 +54,114 @@ def get_global_date_range(iso_data_dict):
 # ------------------------------
 # Tab 1: Comparison of All ISOs
 # ------------------------------
+# ------------------------------
+# Tab 1: Comparison of All ISOs
+# ------------------------------
 def render_comparison_tab(iso_data_dict, start_date, end_date):
+    """
+    Renders a comparison table for all short-term ISOs (i.e. those with timeframe != "long")
+    and displays a long-term forecast MAPE table for long-term ISOs.
+    
+    Parameters:
+        iso_data_dict (dict): Dictionary of ISO dataframes.
+        start_date (str/datetime): Analysis start date.
+        end_date (str/datetime): Analysis end date.
+    """
+    import numpy as np
+    import pandas as pd
+    import streamlit as st
+    from functions import load_config, calculate_mape_long_term
+    from iso_data_integration2 import ensure_uniform_hourly_index
+    from metrics_calculation import compute_iso_metrics
+
     st.subheader("Comparison of All ISOs – Model Performance Overview")
     st.info(f"Showing data from **{start_date}** to **{end_date}**.")
 
+    # Load configuration and separate short-term and long-term ISOs.
+    ISO_CONFIG = load_config()
+    if ISO_CONFIG is None:
+        st.error("Could not load ISO configuration.")
+        return
+
+    # Filter short-term ISOs (timeframe != "long")
+    short_term_data = {
+        iso: df for iso, df in iso_data_dict.items()
+        if iso in ISO_CONFIG and ISO_CONFIG[iso].get("timeframe") != "long"
+    }
+
     overall_metrics = {}
     improvement_metrics = {}
-    mape_by_hour = {}
 
-    for iso_key, df in iso_data_dict.items():
-        if df is not None and not df.empty:
-            # Filter data by date and ensure a uniform hourly index
-            df_filtered = df.loc[str(start_date):str(end_date)].copy()
-            df_filtered = ensure_uniform_hourly_index(df_filtered, iso_key)
+    # Process each short-term ISO dataframe.
+    for iso, df in short_term_data.items():
+        if df is None or df.empty:
+            overall_metrics[iso] = {"MAPE (%)": np.nan, "Avg Error (MW)": np.nan}
+            improvement_metrics[iso] = {"Delta MAPE": np.nan}
+            continue
 
-            # Compute overall metrics
-            metrics = compute_iso_metrics(df_filtered)
-            overall_metrics[iso_key] = metrics
+        # Filter the data by the selected date range and standardize the hourly index.
+        df_filt = df.loc[str(start_date):str(end_date)].copy()
+        df_filt = ensure_uniform_hourly_index(df_filt, iso)
 
-            # Split data into first and second halves for improvement analysis
-            date_range = pd.date_range(start=str(start_date), end=str(end_date), freq='H')
-            if len(date_range) < 2:
-                improvement_metrics[iso_key] = {
-                    "MAPE (First Half)": np.nan,
-                    "First Half Period": "N/A",
-                    "MAPE (Second Half)": np.nan,
-                    "Second Half Period": "N/A",
-                    "Delta MAPE": np.nan,
-                    "Source": iso_key,  # Add Source column
-                    "Time Step": "Hourly", #Add Freq col
-                    "Type": "Load",
-                    "Update Frequency": "Day Ahead"
-                }
-            else:
-                mid_date = date_range[int(len(date_range) / 2)]
-                df_first = df_filtered.loc[str(start_date):str(mid_date)].copy()
-                df_second = df_filtered.loc[str(mid_date):str(end_date)].copy()
-                metrics_first = compute_iso_metrics(df_first)
-                metrics_second = compute_iso_metrics(df_second)
-                delta = metrics_second.get("MAPE (%)", np.nan) - metrics_first.get("MAPE (%)", np.nan)
-                improvement_metrics[iso_key] = {
-                    "MAPE (First Half)": metrics_first.get("MAPE (%)", np.nan),
-                    "First Half Period": f"{start_date} to {mid_date.date()}",
-                    "MAPE (Second Half)": metrics_second.get("MAPE (%)", np.nan),
-                    "Second Half Period": f"{mid_date.date()} to {end_date}",
-                    "Delta MAPE": delta,
-                    "Source": iso_key,  # Add Source column
-                    "Time Step": "Hourly",  # Add Time Step column
-                    "Type": "Load",
-                    "Update Frequency": "Day Ahead"
-                }
+        # Compute overall metrics.
+        metrics = compute_iso_metrics(df_filt)
+        overall_metrics[iso] = metrics
 
-            # Compute MAPE by hour if the required columns exist
-            if ('TOTAL Actual Load (MW)' in df_filtered.columns and
-                'SystemTotal Forecast Load (MW)' in df_filtered.columns):
-                df_filtered['APE'] = (np.abs(df_filtered['TOTAL Actual Load (MW)'] -
-                                             df_filtered['SystemTotal Forecast Load (MW)'])/ df_filtered['TOTAL Actual Load (MW)'] * 100)
-                hourly_mape = df_filtered.groupby(df_filtered.index.hour)['APE'].mean()
-                mape_by_hour[iso_key] = hourly_mape
-            else:
-                mape_by_hour[iso_key] = pd.Series([np.nan] * 24, index=range(24))
+        # For improvement analysis, split the date range into two halves.
+        date_range = pd.date_range(start=str(start_date), end=str(end_date), freq='H')
+        if len(date_range) < 2:
+            improvement_metrics[iso] = {"Delta MAPE": np.nan}
         else:
-            overall_metrics[iso_key] = {"MAPE (%)": np.nan, "Source": iso_key, "Time Step": "Hourly", "Type": "Load", "Update Frequency": "Day Ahead"}  #Include the new vars
-            improvement_metrics[iso_key] = {
-                "MAPE (First Half)": np.nan,
-                "First Half Period": "N/A",
-                "MAPE (Second Half)": np.nan,
-                "Second Half Period": "N/A",
-                "Delta MAPE": np.nan,
-                "Source": iso_key,  # Add Source column
-                "Time Step": "Hourly",  # Add frequency column
-                "Type": "Load",
-                "Update Frequency": "Day Ahead"
-            }
-            mape_by_hour[iso_key] = pd.Series([np.nan] * 24, index=range(24))
+            mid_date = date_range[int(len(date_range) / 2)]
+            df_first = df_filt.loc[str(start_date):str(mid_date)].copy()
+            df_second = df_filt.loc[str(mid_date):str(end_date)].copy()
+            metrics_first = compute_iso_metrics(df_first)
+            metrics_second = compute_iso_metrics(df_second)
+            delta = metrics_second.get("MAPE (%)", np.nan) - metrics_first.get("MAPE (%)", np.nan)
+            improvement_metrics[iso] = {"Delta MAPE": delta}
 
-    # Combine overall and improvement metrics
+    # Build a summary table for short-term ISOs.
     df_overall = pd.DataFrame(overall_metrics).T
-    if "Avg APE (%)" in df_overall.columns:
-        df_overall = df_overall.drop(columns=["Avg APE (%)"])
     df_improvement = pd.DataFrame(improvement_metrics).T
     df_summary = pd.concat([df_overall, df_improvement], axis=1)
 
-    # Add an indicator if performance improved (Delta MAPE negative)
-    df_summary["Improving"] = df_summary["Delta MAPE"].apply(
-        lambda x: "Yes" if pd.notnull(x) and x < 0 else ("No" if pd.notnull(x) else "N/A")
-    )
-
-    #Reorder Columns
-    columns = ['Source', 'Time Step', 'Type', 'Update Frequency'] + [col for col in df_summary.columns if col not in ['Source', 'Time Step', 'Type', 'Update Frequency']] #add the col names you want to rearrange
-    df_summary = df_summary[columns]
-
-    st.markdown("### Summary Metrics")
-    numeric_cols = df_summary.select_dtypes(include=[np.number]).columns
-    fmt = {col: "{:.2f}" for col in numeric_cols}
+    st.markdown("#### Short-Term ISO Comparison Metrics")
+    fmt = "{:.2f}"
     st.dataframe(df_summary.style.format(fmt))
 
-    # Plot: Model Improvement (Delta MAPE) per ISO
-    fig_delta = go.Figure(data=go.Bar(
-        x=df_summary.index,
-        y=df_summary["Delta MAPE"],
-        marker_color=['green' if x < 0 else 'red' for x in df_summary["Delta MAPE"]]
-    ))
-    fig_delta.update_layout(
-        title="Model Improvement (Δ MAPE: Second Half - First Half)",
-        xaxis_title="ISO",
-        yaxis_title="Δ MAPE (%)"
-    )
-    st.plotly_chart(fig_delta, use_container_width=True)
+    st.markdown("### Long-Term Forecast MAPE")
+    # Get the list of long-term ISOs.
+    long_term_isos = [iso for iso in ISO_CONFIG if ISO_CONFIG[iso].get("timeframe") == "long"]
+    if long_term_isos:
+        selected_long_term_iso = st.selectbox("Select Long-Term ISO for Forecast MAPE", long_term_isos)
+        config = ISO_CONFIG[selected_long_term_iso]
+        func_name = config.get("function")
+        if not func_name:
+            st.warning(f"No 'function' specified for {selected_long_term_iso}.")
+        else:
+            # Try to retrieve the data-loading function from the global scope.
+            data_func = globals().get(func_name)
+            if data_func is None:
+                st.error(f"Function '{func_name}' not found for long-term data.")
+            else:
+                try:
+                    # Load the long-term forecast data.
+                    actuals_peak, actuals_energy, forecast_series, forecast_series_energy = data_func()
+                    mape_vals = calculate_mape_long_term(actuals_peak, actuals_energy, forecast_series, forecast_series_energy)
+                    if mape_vals:
+                        # Create a DataFrame without transposing so that the row index is the selected ISO.
+                        df_long = pd.DataFrame([mape_vals])
+                        df_long.index = [selected_long_term_iso]  # Set the ISO name as the row index.
+                        st.dataframe(df_long.style.format("{:.2f}"))
+                    else:
+                        st.warning("Could not calculate Long-Term MAPE.")
+                except Exception as e:
+                    st.error(f"Error executing function '{func_name}' for long-term data: {e}")
+    else:
+        st.info("No long-term ISO configuration available.")
 
-    # Plot: Average MAPE by Hour of Day for each ISO
-    fig_hour = go.Figure()
-    for iso, series in mape_by_hour.items():
-        fig_hour.add_trace(go.Scatter(
-            x=series.index,
-            y=series.values,
-            mode='lines+markers',
-            name=iso
-        ))
-    fig_hour.update_layout(
-        title="Average MAPE by Hour of Day",
-        xaxis_title="Hour of Day",
-        yaxis_title="Average MAPE (%)",
-        xaxis=dict(dtick=1)
-    )
-    st.plotly_chart(fig_hour, use_container_width=True)
+    return df_summary
 
-    # Optional: Overall MAPE by ISO as a bar chart
-    overall_mape = df_overall["MAPE (%)"]
-    fig_overall = go.Figure(data=go.Bar(
-        x=overall_mape.index,
-        y=overall_mape.values,
-        marker_color='blue'
-    ))
-    fig_overall.update_layout(
-        title="Overall MAPE (%) by ISO",
-        xaxis_title="ISO",
-        yaxis_title="MAPE (%)"
-    )
-    st.plotly_chart(fig_overall, use_container_width=True)
 # ------------------------------
 # Tab 2: Single ISO Detailed Analysis
 # ------------------------------
@@ -206,16 +177,6 @@ from scipy.stats import linregress  # For regression analysis
 # Import your own modules
 from iso_data_integration2 import ISO_CONFIG, load_all_iso_data, ensure_uniform_hourly_index, add_price_data_to_existing_df
 from metrics_calculation import compute_iso_metrics
-
-# ------------------------------
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from scipy.stats import linregress
-
-# Assuming ISO_CONFIG, ensure_uniform_hourly_index, and add_price_data_to_existing_df are defined elsewhere
 
 # ------------------------------
 # Tab 2: Single ISO Detailed Analysis
@@ -239,6 +200,15 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
         st.error(f"No data available for {selected_iso} in the selected date range.")
         return
     df = ensure_uniform_hourly_index(df_range, selected_iso)
+
+    # Compute metrics for the selected ISO and date range
+    iso_metrics = compute_iso_metrics(df)
+
+    # Display metrics table at the top of Tab 2
+    st.markdown("### Performance Metrics")
+    metrics_df = pd.DataFrame([iso_metrics]).T.rename(columns={0: "Value"})
+    st.dataframe(metrics_df)
+
 
     # Add price data to the DataFrame (if available)
     df = add_price_data_to_existing_df(df, selected_iso, target_column="LMP Difference (USD)")
@@ -330,7 +300,7 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     if 'TOTAL Actual Load (MW)' in df.columns and 'SystemTotal Forecast Load (MW)' in df.columns:
         df['APE'] = np.abs(df['TOTAL Actual Load (MW)'] - df['SystemTotal Forecast Load (MW)']) / df['TOTAL Actual Load (MW)'] * 100
         df['APE_MA'] = df['APE'].rolling(window=24 * 30, min_periods=1).mean()
-        
+
         fig2 = go.Figure()
         fig2.add_trace(
             go.Scatter(
@@ -375,7 +345,7 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     else:
         df_filtered = df.copy()
 
-    
+
     # Plot 5 (former Plot 4): Bar Plot – Total MW Over/Under Forecasted by Hour
     if 'Forecast Error (MW)' in df_filtered.columns:
         df_filtered['Overforecast_MW'] = np.where(df_filtered['Forecast Error (MW)'] < 0, -df_filtered['Forecast Error (MW)'], 0)

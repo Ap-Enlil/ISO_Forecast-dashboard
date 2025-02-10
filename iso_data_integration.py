@@ -55,6 +55,18 @@ ISO_CONFIG = {
         'actual_column': 'TOTAL Actual Load (MW)',
         'forecast_column': 'SystemTotal Forecast Load (MW)'
     },
+        'ERCOT_long': {
+        'filenames': ["ercot_load-temp_hr_2024.csv", "ercot_load-temp_hr_2025.csv"],
+        'timezone': 'America/Chicago',
+        'required_columns': [
+            'Local Timestamp Central Time (Interval Beginning)',
+            'SystemTotal Forecast Load (MW)',
+            'TOTAL Actual Load (MW)'
+        ],
+        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
+        'actual_column': 'TOTAL Actual Load (MW)',
+        'forecast_column': 'SystemTotal Forecast Load (MW)'
+    },
     'CAISO': {
         'filenames': ["caiso_load-temp_hr_2024.csv", "caiso_load-temp_hr_2025.csv"],
         'timezone': 'America/Los_Angeles',

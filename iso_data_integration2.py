@@ -6,151 +6,14 @@ from io import StringIO
 import pytz
 from sklearn.ensemble import IsolationForest
 import streamlit as st
+from functions import  load_config
+from long_term_forecast_data import load_data_long_term_ercot # Commented out during debugging if not needed.
 
 # ------------------------------
 # ISO configuration dictionary
 # ------------------------------
-ISO_CONFIG = {
-    'SPP': {
-        'filenames': ["spp_load-temp_hr_2024.csv", "spp_load-temp_hr_2025.csv"],
-        'timezone': 'America/Chicago',
-        'required_columns': [
-            'Local Timestamp Central Time (Interval Beginning)',
-            'SPP Total Actual Load (MW)',
-            'SPP Total Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',  # After renaming
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'SPP Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'SPP Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }#,
-                # --- Price Data Files for ERCOT ---
-        #'rt_filenames': ["spp_lmp_rt_15min_hubs_2024Q1.csv","ercot_lmp_rt_15min_hubs_2024Q2.csv","ercot_lmp_rt_15min_hubs_2024Q3.csv","ercot_lmp_rt_15min_hubs_2024Q4.csv", "ercot_lmp_rt_15min_hubs_2025Q1.csv"],
-        #'da_filenames': ["ercot_lmp_da_hr_hubs_2024.csv", "ercot_lmp_da_hr_hubs_2025.csv"],
-        # Specify the price column name (for both RT and DA data)
-        #'price_column': 'Bus average LMP'
-    },
-    'MISO': {
-        'filenames': ["miso_load-temp_hr_2024.csv", "miso_load-temp_hr_2025.csv"],
-        'timezone': 'America/New_York',
-        'required_columns': [
-            'Local Timestamp Central Time (Interval Beginning)',
-            'TOTAL Actual Load (MW)',
-            'SystemTotal Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'Local Timestamp Eastern Standard Time (Interval Beginning)':
-                'Local Timestamp Central Time (Interval Beginning)',
-            'MISO Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'MISO Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }
-    },
-    'ERCOT': { 
-        'filenames': ["ercot_load-temp_hr_2024.csv", "ercot_load-temp_hr_2025.csv"],
-        'timezone': 'America/Chicago',
-        'required_columns': [
-            'Local Timestamp Central Time (Interval Beginning)',
-            'SystemTotal Forecast Load (MW)',
-            'TOTAL Actual Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Central Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        # --- Price Data Files for ERCOT ---
-        'rt_filenames': ["ercot_lmp_rt_15min_hubs_2024Q1.csv","ercot_lmp_rt_15min_hubs_2024Q2.csv","ercot_lmp_rt_15min_hubs_2024Q3.csv","ercot_lmp_rt_15min_hubs_2024Q4.csv", "ercot_lmp_rt_15min_hubs_2025Q1.csv"],
-        'da_filenames': ["ercot_lmp_da_hr_hubs_2024.csv", "ercot_lmp_da_hr_hubs_2025.csv"],
-        # Specify the price column name (for both RT and DA data)
-        'price_column': 'Bus average LMP'
-    },
-
-    'CAISO': {
-        'filenames': ["caiso_load-temp_hr_2024.csv", "caiso_load-temp_hr_2025.csv"],
-        'timezone': 'America/Los_Angeles',
-        'required_columns': [
-            'Local Timestamp Pacific Time (Interval Beginning)',
-            'CAISO Total Actual Load (MW)',
-            'CAISO Total Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Pacific Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'CAISO Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'CAISO Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }
-    },
-    'PJM': {
-        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
-        'timezone': 'America/New_York',
-        'required_columns': [
-            'Local Timestamp Eastern Time (Interval Beginning)',
-            'PJM Total Actual Load (MW)',
-            'PJM Total Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'PJM Total Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'PJM Total Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }
-    },
-    'PJM_Dominion': {
-        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
-        'timezone': 'America/New_York',
-        'required_columns': [
-            'Local Timestamp Eastern Time (Interval Beginning)',
-            'Duke Energy Ohio/Kentucky Actual Load (MW)',
-            'Duke Energy Ohio/Kentucky Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'Duke Energy Ohio/Kentucky Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'Duke Energy Ohio/Kentucky Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }
-    },
-    'PJM_Duquesne': {
-        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
-        'timezone': 'America/New_York',
-        'required_columns': [
-            'Local Timestamp Eastern Time (Interval Beginning)',
-            'Duquesne Light Actual Load (MW)',
-            'Duquesne Light Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'Duquesne Light Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'Duquesne Light Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }
-    },
-    'PJM_EastKentucky': {
-        'filenames': ["pjm_load-temp_hr_2024.csv", "pjm_load-temp_hr_2025.csv"],
-        'timezone': 'America/New_York',
-        'required_columns': [
-            'Local Timestamp Eastern Time (Interval Beginning)',
-            'East Kentucky Power Coop Actual Load (MW)',
-            'East Kentucky Power Coop Forecast Load (MW)'
-        ],
-        'timestamp_column': 'Local Timestamp Eastern Time (Interval Beginning)',
-        'actual_column': 'TOTAL Actual Load (MW)',
-        'forecast_column': 'SystemTotal Forecast Load (MW)',
-        'rename_map': {
-            'East Kentucky Power Coop Actual Load (MW)': 'TOTAL Actual Load (MW)',
-            'East Kentucky Power Coop Forecast Load (MW)': 'SystemTotal Forecast Load (MW)'
-        }
-    }
-}
-
-
+ISO_CONFIG=load_config()
+print(ISO_CONFIG)
 # ------------------------------
 # Data Downloading
 # ------------------------------
@@ -426,27 +289,53 @@ def load_all_iso_data():
         dict: {iso_key: DataFrame or None}
     """
     iso_data = {}
+    ISO_CONFIG=load_config()
     for iso_key, cfg in ISO_CONFIG.items():
-        raw_data = download_data(cfg['filenames'])
-        if raw_data is not None:
-            try:
-                # Preprocess the load data.
-                df = preprocess_iso_data(raw_data, iso_key)
-                # Ensure a uniform hourly UTC index.
-                df = ensure_uniform_hourly_index(df, iso_key)
-                # If price data is configured (e.g. for ERCOT), merge it.
-                # The new function 'add_price_data_to_existing_df' takes care of
-                # downloading the price files, resampling RT data, and merging.
-                if "rt_filenames" in cfg and "da_filenames" in cfg:
-                    df = add_price_data_to_existing_df(df, iso_key, target_column="LMP Difference (USD)")
-            except KeyError as e:
-                print(f"Error processing data for {iso_key}: {e}")
-                df = None
-            iso_data[iso_key] = df
-        else:
-            iso_data[iso_key] = None
-    return iso_data
 
+        # 1. Check timeframe in config
+        timeframe = cfg.get("timeframe", "short")  # default to short if missing
+
+        if timeframe == "short":
+            if 'filenames' in cfg: # Check if 'filenames' key exists for short timeframe
+                raw_data = download_data(cfg['filenames'])
+
+                if raw_data is not None:
+                    try:
+                        # Preprocess the load data (short-term).
+                        df = preprocess_iso_data(raw_data, iso_key)
+
+                        # Ensure a uniform hourly UTC index (short-term only).
+                        df = ensure_uniform_hourly_index(df, iso_key)
+
+                        # If price data is configured, merge it.
+                        if "rt_filenames" in cfg and "da_filenames" in cfg:
+                            df = add_price_data_to_existing_df(df, iso_key, target_column="LMP Difference (USD)")
+
+                    except KeyError as e:
+                        print(f"Error processing data for {iso_key} (short-term): {e}")
+                        df = None
+
+                    iso_data[iso_key] = df
+
+                else:
+                    # raw_data is None
+                    iso_data[iso_key] = None
+            else:
+                print(f"Warning: 'filenames' key is missing in ISO_CONFIG for {iso_key} which is configured for 'short' timeframe. Skipping short-term data loading for this ISO.")
+                iso_data[iso_key] = None
+
+
+        else:
+            # 2. For non-"short" timeframes, do something else or skip
+            # e.g. store None, or call a load_long_term_data() if you have it
+            iso_data[iso_key] = None
+            # Or if you do have long-term logic:
+            # if timeframe == "long":
+            #     iso_data[iso_key] = load_long_term_data(iso_key)
+            # else:
+            #     iso_data[iso_key] = None
+
+    return iso_data
 
 
 # Example: To load and inspect the data for ERCOT (with price data merged)
@@ -455,7 +344,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
     all_iso_data = load_all_iso_data()
     ercot_data = all_iso_data.get("ERCOT")
-    print(ercot_data["LMP Difference (USD)"]   )
+    print(ercot_data.head()  )
 
         # Create a scatter plot:
     plt.figure(figsize=(10, 6))
