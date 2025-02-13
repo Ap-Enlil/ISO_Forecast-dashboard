@@ -8,7 +8,33 @@ from sklearn.ensemble import IsolationForest
 import streamlit as st
 from functions import  load_config
 from long_term_forecast_data import load_data_long_term_ercot # Commented out during debugging if not needed.
+def generate_persistence_forecast(df, actual_col, lag_hours=24):
+    """
+    Generates a persistence forecast by shifting the actual load by a specified number of hours.
+    
+    Args:
+        df (pd.DataFrame): DataFrame with a datetime index.
+        actual_col (str): Name of the column with actual load values.
+        lag_hours (int): Number of hours to shift (default is 24 for "yesterday's" load).
+    
+    Returns:
+        pd.DataFrame: DataFrame with new forecast columns and error metrics.
+    """
+    # Create the persistence forecast column.
+    print("yomamam")
 
+    df['Persistence Forecast (MW)'] = df[actual_col].shift(lag_hours)
+
+    
+  
+    # Calculate forecast error and absolute percentage error.
+    df['Forecast Error (Persistence)'] = df[actual_col] - df['Persistence Forecast (MW)']
+    df['APE (Persistence)'] = (
+        abs(df['Forecast Error (Persistence)']) / df[actual_col]
+    ).replace([np.inf, -np.inf], np.nan) * 100
+
+
+    return df
 # ------------------------------
 # ISO configuration dictionary
 # ------------------------------
@@ -34,56 +60,70 @@ def download_data(filenames):
             return None
     return pd.concat(dfs, ignore_index=True) if dfs else None
 
-
-# ------------------------------
-# Preprocessing ISO Data
-# ------------------------------
 def preprocess_iso_data(data, iso_key):
     """
     Preprocess raw data for a given ISO:
-      - Rename columns as needed.
-      - Convert timestamp to datetime and sort.
-      - Calculate forecast error and percentage error.
-      - Calculate rolling metrics.
+    - Rename columns as needed.
+    - Convert timestamp to datetime and sort.
+    - Optionally, generate a persistence forecast.
+    - Calculate forecast error and rolling metrics.
     """
     if data is None:
         return None
-
+ 
     df = data.copy()
     config = ISO_CONFIG[iso_key]
 
-    # Check for required columns; if not all found, try renaming first.
+    # Rename columns if necessary
     if not all(col in df.columns for col in config['required_columns']):
         if 'rename_map' in config:
             df = df.rename(columns=config['rename_map'])
-            if not all(col in df.columns for col in config['required_columns']):
-                missing = [col for col in config['required_columns'] if col not in df.columns]
+            missing = [col for col in config['required_columns'] if col not in df.columns]
+            if missing:
                 raise KeyError(f"Missing required columns for {iso_key} after renaming: {missing}")
         else:
             missing = [col for col in config['required_columns'] if col not in df.columns]
             raise KeyError(f"Missing required columns for {iso_key}: {missing}")
 
-    # Convert timestamp column to datetime and set as index.
+    # Convert timestamp and sort
     df['Timestamp'] = pd.to_datetime(df[config['timestamp_column']])
     df = df.sort_values('Timestamp').set_index('Timestamp')
-
-    # Rename columns if a rename_map is provided.
+    # (Optional) If a rename_map is provided, rename columns.
+  
     if 'rename_map' in config:
-        df = df.rename(columns=config['rename_map'])
     
-    # Calculate forecast error and percentage errors.
-    df['Forecast Error (MW)'] = df[config['forecast_column']] - df[config['actual_column']]
-    df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df[config['actual_column']]).replace(np.inf, np.nan) * 100
-    df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df[config['actual_column']]).replace(np.inf, np.nan) * 100
+        df = df.rename(columns=config['rename_map'])
 
-    # Remove rows where the absolute percentage error exceeds 10%.
-    df = df[df['APE (%)'] <= 10]
 
-    # Calculate rolling metrics.
-    df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean()
-    df['Rolling Avg Error (MW)'] = df['Forecast Error (MW)'].rolling('7D').mean()
+    
+
+
+
+    # Check which forecast method to use.
+    if config.get("forecast_method", "iso") == "persistence":
+        # Use the persistence forecast.
+        df['SystemTotal Forecast Load (MW)'] = df[config['actual_column']].shift(24)
+        # Calculate forecast error and absolute percentage error.
+        df['Forecast Error (MW)'] = df[config['actual_column']] - df['SystemTotal Forecast Load (MW)']
+        df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df[config['actual_column']]).replace(np.inf, np.nan) * 100
+        df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df[config['actual_column']]).replace(np.inf, np.nan) * 100
+        df = df[df['APE (%)'] <= 20]
+        # (Optional) Remove any rows where the forecast is not available.
+        df = df.dropna(subset=['SystemTotal Forecast Load (MW)'])
+
+    else:
+        # Use the ISO's forecast column as provided.
+        df['Forecast Error (MW)'] = df[config['forecast_column']] - df[config['actual_column']]
+        df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df[config['actual_column']]).replace(np.inf, np.nan) * 100
+        df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df[config['actual_column']]).replace(np.inf, np.nan) * 100
+        df = df[df['APE (%)'] <= 10]
+
+    # Calculate additional rolling metrics, for example:
+    df['Rolling MAPE (30D)'] = df['APE (%)'].rolling('30D').mean() if 'APE (%)' in df.columns else np.nan
+    df['Rolling Avg Error (MW)'] = df['Forecast Error (MW)'].rolling('7D').mean() if 'Forecast Error (MW)' in df.columns else np.nan
 
     return df.dropna()
+
 
 
 # ------------------------------
@@ -92,18 +132,24 @@ def preprocess_iso_data(data, iso_key):
 def ensure_uniform_hourly_index(df, iso_key):
     """
     Ensure the DataFrame has a complete hourly index in UTC.
-      - Remove duplicates.
-      - Localize timestamps with proper DST handling.
-      - Convert to UTC.
-      - Reindex to a full hourly range and interpolate numeric columns.
+    - Remove duplicates.
+    - Localize timestamps with proper DST handling.
+    - Convert to UTC.
+    - Reindex to a full hourly range and interpolate numeric columns.
     """
     config = ISO_CONFIG[iso_key]
-    # Remove duplicate indices (initial pass).
+    # Remove duplicate indices.
     df = df[~df.index.duplicated(keep='first')]
 
     # Ensure index is datetime.
     if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
+        df.index = pd.to_datetime(df.index, errors='coerce')
+
+    # Drop rows where index is NaT.
+    df = df[df.index.notna()]
+    if df.empty:
+        print("DataFrame is empty after dropping NaT indices.")
+        return df
 
     # Localize timestamps if not already localized.
     try:
@@ -124,20 +170,27 @@ def ensure_uniform_hourly_index(df, iso_key):
 
     # Convert to UTC.
     df = df.tz_convert('UTC')
-    
-    # Remove duplicates again (in case duplicates were introduced during localization/conversion).
+
+    # Remove duplicates again.
     df = df[~df.index.duplicated(keep='first')]
 
+    # Get start and end for the full range.
+    start = df.index.min()
+    end = df.index.max()
+    if pd.isna(start) or pd.isna(end):
+        raise ValueError("DataFrame index has NaT for start or end. Check timestamp conversion.")
+
     # Reindex to a complete hourly range.
-    full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='h', tz='UTC')
+    full_range = pd.date_range(start=start, end=end, freq='h', tz='UTC')
     df = df.reindex(full_range)
-    
+
     # Interpolate numeric columns.
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     if not numeric_cols.empty:
         df[numeric_cols] = df[numeric_cols].interpolate(method='time')
 
     return df
+
 def add_price_data_to_existing_df(existing_df, iso_key, target_column="LMP Difference (USD)"):
     """
     Adds real-time (RT) and day-ahead (DA) price data to an existing DataFrame.
@@ -180,6 +233,7 @@ def add_price_data_to_existing_df(existing_df, iso_key, target_column="LMP Diffe
                 st.error(f"Missing timestamp column in RT file: {filename}")  # Streamlit error
                 continue  # Skip to the next file if timestamp is missing
 
+            # Parse timestamps as UTC so the index is already tz-aware.
             rt_df[timestamp_col] = pd.to_datetime(rt_df[timestamp_col], errors='coerce', utc=True)
             rt_df = rt_df.set_index(timestamp_col)
             rt_dfs.append(rt_df)
@@ -187,7 +241,7 @@ def add_price_data_to_existing_df(existing_df, iso_key, target_column="LMP Diffe
 
         except Exception as e:
             print(f"Error downloading or processing RT price file {filename}: {e}")
-            st.error(f"Error processing RT file: {filename}")  # Streamlit error
+            st.error(f"Error processing RT file: {filename}")
 
     if not rt_dfs:
         print("No RT price data loaded. Price data merge skipped.")
@@ -222,6 +276,7 @@ def add_price_data_to_existing_df(existing_df, iso_key, target_column="LMP Diffe
                 st.error(f"Missing timestamp column in DA file: {filename}")
                 continue
 
+            # Parse timestamps as UTC.
             da_df[timestamp_col] = pd.to_datetime(da_df[timestamp_col], errors='coerce', utc=True)
             da_df = da_df.set_index(timestamp_col)
             da_dfs.append(da_df)
@@ -265,7 +320,7 @@ def add_price_data_to_existing_df(existing_df, iso_key, target_column="LMP Diffe
         st.error("Error during merging price data. Check console for details.")
         return existing_df
 
-    # Compute the target column as the difference between RT and DA prices, handling missing columns.
+    # Compute the target column as the difference between RT and DA prices.
     rt_col_name = "RT " + price_col
     da_col_name = "DA " + price_col
 
@@ -276,6 +331,7 @@ def add_price_data_to_existing_df(existing_df, iso_key, target_column="LMP Diffe
         st.error(f"Could not calculate price difference. Check console for details.")
 
     return merged_df
+
 
 
 
@@ -290,8 +346,9 @@ def load_all_iso_data():
     """
     iso_data = {}
     ISO_CONFIG=load_config()
+    
     for iso_key, cfg in ISO_CONFIG.items():
-
+        print(iso_key)
         # 1. Check timeframe in config
         timeframe = cfg.get("timeframe", "short")  # default to short if missing
 
@@ -299,11 +356,14 @@ def load_all_iso_data():
             if 'filenames' in cfg: # Check if 'filenames' key exists for short timeframe
                 raw_data = download_data(cfg['filenames'])
 
+                #print(raw_data)
                 if raw_data is not None:
                     try:
                         # Preprocess the load data (short-term).
                         df = preprocess_iso_data(raw_data, iso_key)
-
+                        print(df.columns)
+                        print(df.iloc[100:200, 20:])    
+                        print("confiddg")
                         # Ensure a uniform hourly UTC index (short-term only).
                         df = ensure_uniform_hourly_index(df, iso_key)
 
@@ -343,14 +403,5 @@ import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
     all_iso_data = load_all_iso_data()
-    ercot_data = all_iso_data.get("ERCOT")
-    print(ercot_data.head()  )
+    ercot_data = all_iso_data.get("ERCOT_persistence")
 
-        # Create a scatter plot:
-    plt.figure(figsize=(10, 6))
-    plt.scatter(ercot_data["LMP Difference (USD)"], ercot_data["Forecast Error (MW)"], alpha=0.6, edgecolor='k')
-    plt.xlabel("DA - RT Price Difference (USD)")
-    plt.ylabel("Forecast Error (MW)")
-    plt.title("Forecast Error vs DA-RT Price Difference (ERCOT)")
-    plt.grid(True)
-    plt.show()
