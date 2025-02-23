@@ -1,0 +1,27 @@
+[Start: if __name__ == "__main__"]
+    -> load_all_iso_data()
+        -> load_config()  // External configuration
+        -> download_data()  // Downloads CSV files from EIA
+            -> requests.get()  // HTTP request
+            -> pd.read_csv()  // Parses CSV
+        -> preprocess_iso_data()
+            -> generate_persistence_forecast() // if persistence forecast
+            -> pd.to_datetime()
+            -> df.sort_values()
+            -> df.set_index()
+            -> df.shift()  // For persistence forecast
+        -> ensure_uniform_hourly_index()
+            -> pd.to_datetime()
+            -> df.tz_localize()
+            -> df.tz_convert()
+            -> pd.date_range()
+            -> df.reindex()
+            -> df.interpolate()
+        -> add_price_data_to_existing_df()
+              -> download_data() //For RT and DA files
+                  ->requests.get()
+                  ->pd.read_csv()
+              ->pd.concat()
+              ->resample('h').mean()
+              ->merge()
+    -> [End:  ercot_data (or other ISO data) is available]

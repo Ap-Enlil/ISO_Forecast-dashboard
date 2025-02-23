@@ -59,47 +59,39 @@ def get_global_date_range(iso_data_dict):
 # ------------------------------
 def render_comparison_tab(iso_data_dict, start_date, end_date):
     """
-    Renders a comparison table for all short-term ISOs (i.e. those with timeframe != "long")
-    and displays a long-term forecast MAPE table for long-term ISOs.
-    
-    Parameters:
-        iso_data_dict (dict): Dictionary of ISO dataframes.
-        start_date (str/datetime): Analysis start date.
-        end_date (str/datetime): Analysis end date.
+    Renders a comparison table for all short-term ISOs with only the key performance metrics 
+    (MAPE and Avg Error) plus configuration characteristics.
     """
     import numpy as np
     import pandas as pd
     import streamlit as st
-    from functions import load_config, calculate_mape_long_term
+    from functions import load_config
     from iso_data_integration2 import ensure_uniform_hourly_index
     from metrics_calculation import compute_iso_metrics
 
-    st.subheader("Comparison of All ISOs – Model Performance Overview")
+    st.subheader("ISO Comparison – Performance & Characteristics")
     st.info(f"Showing data from **{start_date}** to **{end_date}**.")
 
-    # Load configuration and separate short-term and long-term ISOs.
+    # Load configuration and filter for short-term ISOs.
     ISO_CONFIG = load_config()
     if ISO_CONFIG is None:
         st.error("Could not load ISO configuration.")
         return
 
-    # Filter short-term ISOs (timeframe != "long")
+    # Filter only short-term ISOs.
     short_term_data = {
         iso: df for iso, df in iso_data_dict.items()
         if iso in ISO_CONFIG and ISO_CONFIG[iso].get("timeframe") != "long"
     }
 
     overall_metrics = {}
-    improvement_metrics = {}
 
-    # Process each short-term ISO dataframe.
     for iso, df in short_term_data.items():
         if df is None or df.empty:
             overall_metrics[iso] = {"MAPE (%)": np.nan, "Avg Error (MW)": np.nan}
-            improvement_metrics[iso] = {"Delta MAPE": np.nan}
             continue
 
-        # Filter the data by the selected date range and standardize the hourly index.
+        # Filter by date range and standardize index.
         df_filt = df.loc[str(start_date):str(end_date)].copy()
         df_filt = ensure_uniform_hourly_index(df_filt, iso)
 
@@ -107,60 +99,32 @@ def render_comparison_tab(iso_data_dict, start_date, end_date):
         metrics = compute_iso_metrics(df_filt)
         overall_metrics[iso] = metrics
 
-        # For improvement analysis, split the date range into two halves.
-        date_range = pd.date_range(start=str(start_date), end=str(end_date), freq='H')
-        if len(date_range) < 2:
-            improvement_metrics[iso] = {"Delta MAPE": np.nan}
-        else:
-            mid_date = date_range[int(len(date_range) / 2)]
-            df_first = df_filt.loc[str(start_date):str(mid_date)].copy()
-            df_second = df_filt.loc[str(mid_date):str(end_date)].copy()
-            metrics_first = compute_iso_metrics(df_first)
-            metrics_second = compute_iso_metrics(df_second)
-            delta = metrics_second.get("MAPE (%)", np.nan) - metrics_first.get("MAPE (%)", np.nan)
-            improvement_metrics[iso] = {"Delta MAPE": delta}
+    # Build a summary DataFrame with only MAPE and Avg Error.
+    df_summary = pd.DataFrame(overall_metrics).T[['MAPE (%)', 'Avg Error (MW)']]
 
-    # Build a summary table for short-term ISOs.
-    df_overall = pd.DataFrame(overall_metrics).T
-    df_improvement = pd.DataFrame(improvement_metrics).T
-    df_summary = pd.concat([df_overall, df_improvement], axis=1)
+    # Add ISO configuration characteristics (from JSON) to each row.
+    # Characteristics to add: forecast_method, timeframe, type_of_forecast, update_frequency, time_step, timezone
+    for iso in df_summary.index:
+        config = ISO_CONFIG.get(iso, {})
+        df_summary.loc[iso, 'forecast_method'] = config.get("forecast_method")
+        df_summary.loc[iso, 'timeframe'] = config.get("timeframe")
+        df_summary.loc[iso, 'ISO'] = config.get("ISO")
+        df_summary.loc[iso, 'type_of_forecast'] = config.get("type_of_forecast")
+        df_summary.loc[iso, 'update_frequency'] = config.get("update_frequency")
+        df_summary.loc[iso, 'time_step'] = config.get("time_step")
+        df_summary.loc[iso, 'timezone'] = config.get("timezone")
 
-    st.markdown("#### Short-Term ISO Comparison Metrics")
-    fmt = "{:.2f}"
-    st.dataframe(df_summary.style.format(fmt))
+    # (Optional) Allow the user to toggle these extra columns.
+    show_chars = st.checkbox("Show ISO characteristics", value=True)
+    if not show_chars:
+        df_summary = df_summary[['MAPE (%)', 'Avg Error (MW)']]
 
-    st.markdown("### Long-Term Forecast MAPE")
-    # Get the list of long-term ISOs.
-    long_term_isos = [iso for iso in ISO_CONFIG if ISO_CONFIG[iso].get("timeframe") == "long"]
-    if long_term_isos:
-        selected_long_term_iso = st.selectbox("Select Long-Term ISO for Forecast MAPE", long_term_isos)
-        config = ISO_CONFIG[selected_long_term_iso]
-        func_name = config.get("function")
-        if not func_name:
-            st.warning(f"No 'function' specified for {selected_long_term_iso}.")
-        else:
-            # Try to retrieve the data-loading function from the global scope.
-            data_func = globals().get(func_name)
-            if data_func is None:
-                st.error(f"Function '{func_name}' not found for long-term data.")
-            else:
-                try:
-                    # Load the long-term forecast data.
-                    actuals_peak, actuals_energy, forecast_series, forecast_series_energy = data_func()
-                    mape_vals = calculate_mape_long_term(actuals_peak, actuals_energy, forecast_series, forecast_series_energy)
-                    if mape_vals:
-                        # Create a DataFrame without transposing so that the row index is the selected ISO.
-                        df_long = pd.DataFrame([mape_vals])
-                        df_long.index = [selected_long_term_iso]  # Set the ISO name as the row index.
-                        st.dataframe(df_long.style.format("{:.2f}"))
-                    else:
-                        st.warning("Could not calculate Long-Term MAPE.")
-                except Exception as e:
-                    st.error(f"Error executing function '{func_name}' for long-term data: {e}")
-    else:
-        st.info("No long-term ISO configuration available.")
+    # Display the summary table.
+    # If you want to allow inline editing, you can use st.data_editor (Streamlit version 1.18+)
+    st.data_editor(df_summary, num_rows="dynamic", use_container_width=True)
 
     return df_summary
+
 
 # ------------------------------
 # Tab 2: Single ISO Detailed Analysis
@@ -178,6 +142,9 @@ from scipy.stats import linregress  # For regression analysis
 from iso_data_integration2 import ISO_CONFIG, load_all_iso_data, ensure_uniform_hourly_index, add_price_data_to_existing_df
 from metrics_calculation import compute_iso_metrics
 
+# ------------------------------
+# Tab 2: Single ISO Detailed Analysis
+# ------------------------------
 # ------------------------------
 # Tab 2: Single ISO Detailed Analysis
 # ------------------------------
@@ -209,11 +176,10 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     metrics_df = pd.DataFrame([iso_metrics]).T.rename(columns={0: "Value"})
     st.dataframe(metrics_df)
 
-
     # Add price data to the DataFrame (if available)
     df = add_price_data_to_existing_df(df, selected_iso, target_column="LMP Difference (USD)")
 
-    # Compute a moving average for the forecast error
+    # Compute a moving average for the forecast error (30-day window, 24 hours each day)
     if 'Forecast Error (MW)' in df.columns:
         df['Error_MA_30D'] = df['Forecast Error (MW)'].rolling(window=24 * 30, min_periods=1).mean()
 
@@ -221,17 +187,22 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     # Plot 1: Load vs Forecast and Forecast Error
     # ------------------------------
     fig1 = make_subplots(
-        rows=2, cols=1,
+        rows=2,
+        cols=1,
         shared_xaxes=True,
         vertical_spacing=0.07,
         subplot_titles=("Load vs Forecast", "Forecast Error vs Time")
     )
 
+    # Subplot 1: Actual Load vs. Forecast
     if 'TOTAL Actual Load (MW)' in df.columns and 'SystemTotal Forecast Load (MW)' in df.columns:
         y_min = min(df['TOTAL Actual Load (MW)'].min(), df['SystemTotal Forecast Load (MW)'].min())
+
+        # Actual Load
         fig1.add_trace(
             go.Scatter(
-                x=df.index, y=df['TOTAL Actual Load (MW)'],
+                x=df.index,
+                y=df['TOTAL Actual Load (MW)'],
                 name='Actual Load',
                 mode='lines',
                 line=dict(color='rgba(0,100,80,0.8)'),
@@ -239,9 +210,12 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
             ),
             row=1, col=1
         )
+
+        # Fill area under actual load
         fig1.add_trace(
             go.Scatter(
-                x=df.index, y=[y_min] * len(df),
+                x=df.index,
+                y=[y_min] * len(df),
                 mode='lines',
                 line=dict(color='rgba(0,0,0,0)'),
                 fill='tonexty',
@@ -251,9 +225,12 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
             ),
             row=1, col=1
         )
+
+        # Forecast
         fig1.add_trace(
             go.Scatter(
-                x=df.index, y=df['SystemTotal Forecast Load (MW)'],
+                x=df.index,
+                y=df['SystemTotal Forecast Load (MW)'],
                 name='Forecast',
                 mode='lines',
                 line=dict(color='rgba(0,0,255,0.8)'),
@@ -265,23 +242,32 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     else:
         st.warning("Missing columns for Actual Load or Forecast. Skipping first plot.")
 
+    # Subplot 2: Forecast Error vs. Time
     if 'Forecast Error (MW)' in df.columns:
-        df_positive = df['Forecast Error (MW)'].clip(lower=0)
-        df_negative = df['Forecast Error (MW)'].clip(upper=0)
+        # Separate positive (Overforecast) and negative (Underforecast) errors
+        df_overforecast = df['Forecast Error (MW)'].clip(lower=0)   # error > 0
+        df_underforecast = df['Forecast Error (MW)'].clip(upper=0)  # error < 0
+
         fig1.add_trace(
             go.Scatter(
-                x=df.index, y=df_positive,
-                fill='tozeroy', name='Over-forecast',
-                fillcolor='rgba(0,0,255,0.2)', line=dict(color='rgba(0,0,255,0)'),
+                x=df.index,
+                y=df_overforecast,
+                fill='tozeroy',
+                name='Model Overforecast (MW)',
+                fillcolor='rgba(0,0,255,0.2)',
+                line=dict(color='rgba(0,0,255,0)'),
                 connectgaps=True
             ),
             row=2, col=1
         )
         fig1.add_trace(
             go.Scatter(
-                x=df.index, y=df_negative,
-                fill='tozeroy', name='Under-forecast',
-                fillcolor='rgba(255,0,0,0.2)', line=dict(color='rgba(255,0,0,0)'),
+                x=df.index,
+                y=df_underforecast,
+                fill='tozeroy',
+                name='Model Underforecast (MW)',
+                fillcolor='rgba(255,0,0,0.2)',
+                line=dict(color='rgba(255,0,0,0)'),
                 connectgaps=True
             ),
             row=2, col=1
@@ -295,10 +281,13 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     st.plotly_chart(fig1, use_container_width=True)
 
     # ------------------------------
-    # Plot 2: MAPE vs Time with a threshold line and a 30-day moving average
+    # Plot 2: MAPE vs Time with a threshold line (4%) and a 30-day moving average
     # ------------------------------
     if 'TOTAL Actual Load (MW)' in df.columns and 'SystemTotal Forecast Load (MW)' in df.columns:
-        df['APE'] = np.abs(df['TOTAL Actual Load (MW)'] - df['SystemTotal Forecast Load (MW)']) / df['TOTAL Actual Load (MW)'] * 100
+        df['APE'] = (
+            np.abs(df['TOTAL Actual Load (MW)'] - df['SystemTotal Forecast Load (MW)']) 
+            / df['TOTAL Actual Load (MW)'] * 100
+        )
         df['APE_MA'] = df['APE'].rolling(window=24 * 30, min_periods=1).mean()
 
         fig2 = go.Figure()
@@ -320,6 +309,7 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
                 line=dict(color='grey', width=1)
             )
         )
+        # Threshold line at 4%
         fig2.add_shape(
             type="line",
             xref="paper", yref="y",
@@ -336,7 +326,9 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     else:
         st.warning("Required columns for APE calculation not found.")
 
-    # Day-Type Filter for upcoming bar plots
+    # ------------------------------
+    # Day-Type Filter for Bar Plots
+    # ------------------------------
     day_filter = st.radio("Select Day Type for Bar Plots", options=["Weekdays", "Weekends", "Both"], index=2)
     if day_filter == "Weekdays":
         df_filtered = df[df.index.dayofweek < 5]
@@ -345,11 +337,22 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     else:
         df_filtered = df.copy()
 
-
-    # Plot 5 (former Plot 4): Bar Plot – Total MW Over/Under Forecasted by Hour
+    # ------------------------------
+    # Plot 5: Bar Plot – Total MW Over/Under Forecasted by Hour
+    # ------------------------------
     if 'Forecast Error (MW)' in df_filtered.columns:
-        df_filtered['Overforecast_MW'] = np.where(df_filtered['Forecast Error (MW)'] < 0, -df_filtered['Forecast Error (MW)'], 0)
-        df_filtered['Underforecast_MW'] = np.where(df_filtered['Forecast Error (MW)'] > 0, df_filtered['Forecast Error (MW)'], 0)
+        # Overforecast (error > 0): store the actual positive value
+        df_filtered['Overforecast_MW'] = np.where(
+            df_filtered['Forecast Error (MW)'] > 0,
+            df_filtered['Forecast Error (MW)'],
+            0
+        )
+        # Underforecast (error < 0): store the positive magnitude of the negative error
+        df_filtered['Underforecast_MW'] = np.where(
+            df_filtered['Forecast Error (MW)'] < 0,
+            -df_filtered['Forecast Error (MW)'],
+            0
+        )
 
         grouped_mw = df_filtered.groupby(df_filtered.index.hour).agg({
             'Overforecast_MW': 'sum',
@@ -361,13 +364,13 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
         fig3.add_trace(go.Bar(
             x=grouped_mw[hour_col],
             y=grouped_mw['Overforecast_MW'],
-            name='Overforecast (MW)',
+            name='Model Overforecast (MW)',
             marker_color='blue'
         ))
         fig3.add_trace(go.Bar(
             x=grouped_mw[hour_col],
             y=grouped_mw['Underforecast_MW'],
-            name='Underforecast (MW)',
+            name='Model Underforecast (MW)',
             marker_color='red'
         ))
         fig3.update_layout(
@@ -381,10 +384,22 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     else:
         st.warning("Forecast Error data not available for the MW bar plot.")
 
-    # Plot 6 (former Plot 5): Bar Plot – Count of Over/Under Forecast Occurrences by Hour
+    # ------------------------------
+    # Plot 6: Bar Plot – Count of Over/Under Forecast Occurrences by Hour
+    # ------------------------------
     if 'Forecast Error (MW)' in df_filtered.columns:
-        df_filtered['Overforecast_Count'] = np.where(df_filtered['Forecast Error (MW)'] < 0, 1, 0)
-        df_filtered['Underforecast_Count'] = np.where(df_filtered['Forecast Error (MW)'] > 0, 1, 0)
+        # Overforecast: error > 0
+        df_filtered['Overforecast_Count'] = np.where(
+            df_filtered['Forecast Error (MW)'] > 0, 
+            1, 
+            0
+        )
+        # Underforecast: error < 0
+        df_filtered['Underforecast_Count'] = np.where(
+            df_filtered['Forecast Error (MW)'] < 0, 
+            1, 
+            0
+        )
 
         grouped_count = df_filtered.groupby(df_filtered.index.hour).agg({
             'Overforecast_Count': 'sum',
@@ -396,13 +411,13 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
         fig4.add_trace(go.Bar(
             x=grouped_count[hour_col],
             y=grouped_count['Overforecast_Count'],
-            name='Overforecast Count',
+            name='Model Overforecast Count',
             marker_color='blue'
         ))
         fig4.add_trace(go.Bar(
             x=grouped_count[hour_col],
             y=grouped_count['Underforecast_Count'],
-            name='Underforecast Count',
+            name='Model Underforecast Count',
             marker_color='red'
         ))
         fig4.update_layout(
@@ -416,10 +431,11 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
     else:
         st.warning("Forecast Error data not available for the count bar plot.")
 
-
-    # Plot 3: Bar Plot – Average Price Difference vs Binned Forecast Error
+    # ------------------------------
+    # Plot 3: Average Price Difference vs Binned % Error (Weekdays)
+    # ------------------------------
     if "LMP Difference (USD)" in df_filtered.columns and "Forecast Error (MW)" in df_filtered.columns:
-    # Filter for weekdays only
+        # Filter further for weekdays only
         weekday_data = df_filtered[df_filtered.index.dayofweek < 5].copy()
 
         # Remove NaN values
@@ -427,19 +443,32 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
 
         if not valid_data.empty:
             # Calculate the percentage error
-            valid_data['% Error'] = (valid_data['Forecast Error (MW)'] / valid_data['TOTAL Actual Load (MW)']) * 100
+            valid_data['% Error'] = (
+                valid_data['Forecast Error (MW)'] / valid_data['TOTAL Actual Load (MW)'] * 100
+            )
 
-            # Define the bins for percentage error
+            # Define bins for the % Error
             bins = [-np.inf, -4, -2, -1, 0, 1, 2, 4, np.inf]
-            bin_labels = ["<-4%", "-4% to -2%",  "-2% to -1%", "-1% to 0%", "0% to 1%", "1% to 2%", "2% to 4%",  ">4%"]
+            bin_labels = ["<-4%", "-4% to -2%", "-2% to -1%", "-1% to 0%",
+                          "0% to 1%", "1% to 2%", "2% to 4%", ">4%"]
 
-            # Bin the percentage error
-            valid_data['Error Bin'] = pd.cut(valid_data['% Error'], bins=bins, labels=bin_labels, include_lowest=True, right=False)
+            # Bin the % Error
+            valid_data['Error Bin'] = pd.cut(
+                valid_data['% Error'],
+                bins=bins,
+                labels=bin_labels,
+                include_lowest=True,
+                right=False
+            )
 
-            # Calculate the average price difference for each bin
-            avg_price_diff_by_bin = valid_data.groupby('Error Bin')['LMP Difference (USD)'].mean().reset_index()
+            # Calculate the average price difference by bin
+            avg_price_diff_by_bin = (
+                valid_data.groupby('Error Bin')['LMP Difference (USD)']
+                .mean()
+                .reset_index()
+            )
 
-            # Create the bar plot
+            # Bar plot: Average Price Difference vs. Binned % Error
             fig5 = go.Figure()
             fig5.add_trace(go.Bar(
                 x=avg_price_diff_by_bin['Error Bin'],
@@ -448,8 +477,8 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
                 marker_color='green'
             ))
             fig5.update_layout(
-                title="Average Price Difference vs Binned Average % Error (Weekdays)",
-                xaxis_title="Average % Error (Weekday)",
+                title="Average Price Difference vs Binned % Error (Weekdays)",
+                xaxis_title="Binned % Error (Weekdays)",
                 yaxis_title="Average Price Difference (USD)",
                 height=400
             )
@@ -458,11 +487,6 @@ def render_iso_analysis_tab(iso_data_dict, start_date, end_date):
             st.warning("No valid weekday data for the price difference vs % error bar plot.")
     else:
         st.warning("Required data not available for the price difference vs % error bar plot.")
-
-
 # ------------------------------
 # Tab 3: Weather Data (Placeholder)
 # ------------------------------
-def render_weather_tab():
-    st.subheader("Weather Data Analysis (Coming Soon)")
-    st.info("Weather data integration and related metrics will be added in a future update.")

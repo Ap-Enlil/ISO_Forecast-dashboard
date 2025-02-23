@@ -113,7 +113,7 @@ def preprocess_iso_data(data, iso_key):
 
     else:
         # Use the ISO's forecast column as provided.
-        df['Forecast Error (MW)'] = df[config['forecast_column']] - df[config['actual_column']]
+        df['Forecast Error (MW)'] =  + df[config['actual_column']] -df[config['forecast_column']]
         df['APE (%)'] = (abs(df['Forecast Error (MW)']) / df[config['actual_column']]).replace(np.inf, np.nan) * 100
         df['Percentage Error (%)'] = (df['Forecast Error (MW)'] / df[config['actual_column']]).replace(np.inf, np.nan) * 100
         df = df[df['APE (%)'] <= 10]

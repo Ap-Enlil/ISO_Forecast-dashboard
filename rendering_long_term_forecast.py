@@ -11,7 +11,7 @@ from functions import load_config
 # Import our own modules (assuming these are in the same directory or accessible)
 from iso_data_integration import load_all_iso_data, ensure_uniform_hourly_index
 from metrics_calculation import compute_iso_metrics
-from rendering import load_data, get_global_date_range, render_comparison_tab, render_iso_analysis_tab, render_weather_tab
+from rendering import load_data, get_global_date_range, render_comparison_tab, render_iso_analysis_tab
 
 
 
@@ -191,6 +191,8 @@ def render_long_term_tab():
     plot_long_term_forecasts(actuals_peak, actuals_energy, forecast_series, forecast_series_energy, selected_forecasts, plot_type)
     st.header("MAPE (Mean Absolute Percentage Error)")
     calculate_mape_long_term(actuals_peak, actuals_energy, forecast_series, forecast_series_energy)
+    mape_values = calculate_mape_long_term(actuals_peak, actuals_energy, forecast_series, forecast_series_energy)
+    st.write(mape_values)
 
 
 

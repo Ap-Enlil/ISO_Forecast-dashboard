@@ -11,7 +11,8 @@ from collections import defaultdict
 # Import our own modules (assuming these are in the same directory or accessible)
 from iso_data_integration import ISO_CONFIG, load_all_iso_data, ensure_uniform_hourly_index
 from metrics_calculation import compute_iso_metrics
-from rendering import load_data, get_global_date_range, render_comparison_tab, render_iso_analysis_tab, render_weather_tab
+from rendering import load_data, get_global_date_range, render_comparison_tab, render_iso_analysis_tab
+from rendering_Weather2Pow import render_weather_tab
 from rendering_long_term_forecast import render_long_term_tab
 from functions import  load_config
 from long_term_forecast_data import load_data_long_term_ercot
@@ -56,50 +57,48 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-# ------------------------------
-# Import Rendering Functions from the Other Module
-# ------------------------------
-from rendering import load_data, get_global_date_range, render_comparison_tab, render_iso_analysis_tab, render_weather_tab
+
+
 def main():
     st.title("Forecast Model Registry – Comparison & Analysis")
-    st.markdown("Welcome to the forecast analysis tool. Use the sidebar to select the date range for global and ISO-specific forecast performance.")
+    st.markdown("Welcome to the forecast analysis tool. Use the sidebar to select the date range for forecast performance.")
 
-    # Load ISO data (for tabs 1-3) - load ALL iso data first, for date range calculation
+    # Load ISO data
     iso_data_dict = load_data()
 
-    # Load ISO Config to filter for long-term ISOs
+    # Load ISO Config
     ISO_CONFIG = load_config()
     if ISO_CONFIG is None:
         st.error("Could not load ISO configuration.")
         return
 
-    long_term_isos = {} # Dictionary to store long-term ISO names and their configs
+    # Filter for long-term ISOs
+    long_term_isos = {}
     for iso_name, config in ISO_CONFIG.items():
         if config.get("timeframe") == "long":
             long_term_isos[iso_name] = config
 
-    # --- Sidebar for ISO Selection and Global Date Selection (for Tabs 1-3) ---
-    with st.sidebar:
-        st.header("ISO and Date Selection")
+    # Convert the dict keys to a list
+    long_term_iso_options = list(long_term_isos.keys())
 
-        # --- ISO Selection (FILTERED for Long-Term ISOs) ---
-        long_term_iso_options = list(long_term_isos.keys()) # Use filtered list
+    # --- Sidebar for Date Selection only ---
+    with st.sidebar:
+        st.header("Global Date Selection")
+
+        # 1) Automatically pick first ISO (or None if list is empty)
         if not long_term_iso_options:
             st.warning("No Long-Term ISO configurations found.")
-            selected_iso_name = None # Handle case with no long-term ISOs
+            selected_iso_name = None
         else:
-            selected_iso_name = st.selectbox(
-                "Select Long-Term ISO for Comparison", # Updated label
-                options=long_term_iso_options,
-                index=0 if long_term_iso_options else 0 # Default to first if available
-            )
+            # Automatically choose the first ISO from the list—no selectbox
+            selected_iso_name = long_term_iso_options[0]
+            #st.info(f"Using default ISO: {selected_iso_name}")
 
-        st.header("Global Date Selection") # Moved below ISO selection
-        # Global date range (for tabs 1-3) - moved inside sidebar for clarity
-        global_min, global_max = get_global_date_range(iso_data_dict) # Still use ALL iso_data for date range
+        # 2) Global date range from all iso_data_dict
+        global_min, global_max = get_global_date_range(iso_data_dict)
         if global_min is None or global_max is None:
             st.error("No valid ISO data available to set date range.")
-            start_date, end_date = None, None # Handle case with no date range
+            start_date, end_date = None, None
         else:
             default_start = global_max - pd.Timedelta(days=30)
             if default_start < global_min:
@@ -113,25 +112,34 @@ def main():
             )
     # --- End Sidebar ---
 
+    # Create the tabs
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Comparison (Table)", "Single ISO Analysis", "Weather Data Analysis", "Long Term Forecast"]
+    )
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Comparison (Table)", "Single ISO Analysis", "Weather Data Analysis", "Long Term Forecast"])
-
+    # Tab 1
     with tab1:
-        if selected_iso_name and start_date and end_date: # Check if selected_iso_name and dates are valid
-            render_comparison_tab(iso_data_dict, start_date, end_date) # Pass selected_iso_name
-        elif not long_term_iso_options: # Check for long_term_iso_options instead of iso_options
+        if selected_iso_name and start_date and end_date:
+            render_comparison_tab(iso_data_dict, start_date, end_date)
+        elif not long_term_iso_options:
             st.warning("No Long-Term ISO configurations found to display in Comparison Tab.")
         elif not (start_date and end_date):
             st.warning("No valid date range available. Please check your data sources.")
         else:
-            st.warning("Please select a Long-Term ISO and ensure valid date range is available.") # Updated warning
+            st.warning("Please ensure a valid date range is selected.")
 
+    # Tab 2
     with tab2:
-        render_iso_analysis_tab(iso_data_dict, start_date, end_date) # Keep as is, for all ISOs
+        render_iso_analysis_tab(iso_data_dict, start_date, end_date)
+
+    # Tab 3
     with tab3:
-        render_weather_tab() # Keep as is
+        render_weather_tab(start_date, end_date)
+
+    # Tab 4
     with tab4:
-        render_long_term_tab()  # Long-term tab, with its OWN sidebar, keep as is
+        # if you have a specific function for the long-term tab
+        render_long_term_tab()  
 
 if __name__ == "__main__":
     main()
