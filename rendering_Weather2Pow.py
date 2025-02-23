@@ -380,9 +380,9 @@ def run_analysis(df, clustering_start_date, clustering_end_date, display_start_d
 def render_weather_tab(start_date, end_date):
     st.header("ERCOT Wind Power Forecast Analysis")
 
-    username = "antoine.bertoncello@gmail.com"
-    password = "nEUQUEN2025!"
-    subscription_key = "8daa9c431fc34bb09734abdb83791b5f"
+    username = "badcontest7@gmail.com"
+    password = "Dashboard2025!"
+    subscription_key = "bde2664645264fd1964037b9880ea421"
 
     filename = "delivery_data_last_year_filtered.csv"
 
