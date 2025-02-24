@@ -8,7 +8,7 @@ from sklearn.ensemble import IsolationForest
 import streamlit as st
 from functions import  load_config
 from long_term_forecast_data import load_data_long_term_ercot # Commented out during debugging if not needed.
-def generate_persistence_forecast(df, actual_col, lag_hours=24):
+def generate_persistence_forecast(df, actual_col, lag_hours=1):
     """
     Generates a persistence forecast by shifting the actual load by a specified number of hours.
     
